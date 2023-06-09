@@ -62,9 +62,9 @@ SegmentedCode::SegmentedCode(int b) : length(b) {
 			prefix_00_code.pop_back();
 		}
 	}
-	a0 = max_syn_00;
-	a1 = max_syn_11;
-	a01 = max_syn_01;
+	syndrome_00 = max_syn_00;
+	syndrome_11 = max_syn_11;
+	syndrome_01 = max_syn_01;
 	//initialize the maps:
 	stack<int> stack;
 	vector<int> binNum;
@@ -178,207 +178,216 @@ vector<int> SegmentedCode::encode(vector<int> data, int mode) {
 	return encrypted2;
 }
 
-vector<int> SegmentedCode::decode(vector<int> block, int mode) {
+vector<int> SegmentedCode::decode(const vector<int> block, int mode) {
 	correctData.clear();
 	vector<int> codeword;
-	int pi = 0;
-	int a_kova;
+	int position = 0;
+	int new_syndrome;
 	bool shortSeg = false;
 	bool lastSeg = false;
 	for (int i = 0; i < numOfSegments; i++) {
-		if (pi + length - 1 >= block.size()) {
+		if (position + length - 1 >= block.size()) {
 			shortSeg = true;
-			codeword = slice(block, pi, pi + length - 2);
+			codeword = slice(block, position, position + length - 2);
 		}
 		else {
-			if (pi + length + 1 >= block.size()) lastSeg = true;
-			codeword = slice(block, pi, pi + length - 1);
-			a_kova = syn(codeword);
+			if (position + length + 1 >= block.size()) lastSeg = true;
+			codeword = slice(block, position, position + length - 1);
+			new_syndrome = syn(codeword);
 		}
 		if (mode == 0) { //it's deletion error correction
-			int segType = codeword.at(0);  //segtype stands for which kind of segment we're decodin now (00 or 11)
-			if (segType == 0) {
-				if (!shortSeg && a_kova == a0) {
-					for (int bit : dict0decrypt.at(codeword)) {
-						correctData.push_back(bit);
-					}
-					pi = pi + length;
-				}
-				else {
-					if (!shortSeg) codeword.pop_back();
-					for (int bit : dict0decrypt.at(restore(codeword, a0, 0))) {
-						correctData.push_back(bit);
-					}
-					pi = pi + length - 1;
-				}
-			}
-			else
-			{
-				if (!shortSeg && a_kova == a1) {
-					for (int bit : dict1decrypt.at(codeword)) {
-						correctData.push_back(bit);
-					}
-					pi = pi + length;
-				}
-				else {
-					if (!shortSeg) codeword.pop_back();
-					for (int bit : dict1decrypt.at(restore(codeword, a1, 0))) {
-						correctData.push_back(bit);
-					}
-					pi = pi + length - 1;
-				}
-			}
+			deletionDecode(codeword, shortSeg, new_syndrome, position);
 		}
 		else { //it's inserion error correction mode
-			if (a_kova == a01) {
-				for (int bit : dict01decrypt.at(codeword)) {
-					correctData.push_back(bit);
-				}
-				pi = pi + length;
-				//check if there was an insertion in the end
-				if (!lastSeg) {
-					if (!(block.at(pi) == 0 && block.at(pi + 1) == 1)) pi++;
-					else if (block.at(pi) == 0 && block.at(pi + 1) == 1 && block.at(pi + 2) == 0 && block.at(pi + 3) == 1) {
-						//check if the inserted bit is 0  at the position 2 in the next segment
-						codeword.clear();
-						for (int i = 0; i < (length + 1); i++) {
-							if (i != 2) {
-								codeword.push_back(block.at(pi + i));
-							}
-						}
-						if (syn(codeword) == a01) {
-							pi = pi + length + 1;
-							for (int bit : dict01decrypt.at(codeword)) {
-								correctData.push_back(bit);
-							}
-						}
-						else {
-							//check if the inserted bit is 1 at the position 3 in the next segment
-							codeword.clear();
-							for (int i = 0; i < (length + 1); i++) {
-								if (i != 3) {
-									codeword.push_back(block.at(pi + i));
-								}
-							}
-							if (syn(codeword) == a01) {
-								pi = pi + length + 1;
-								for (int bit : dict01decrypt.at(codeword)) {
-									correctData.push_back(bit);
-								}
-							}
-							else {
-								//check if the inserted bit is 0  at the position length+1 in the current segment and the inserted bit 1 in the position 0 in the next segment
-								codeword.clear();
-								for (int i = 2; i < length; i++) {
-									codeword.push_back(block.at(pi + i));
-								}
-								if (syn(codeword) == a01) {
-									pi = pi + length + 2;
-									for (int bit : dict01decrypt.at(codeword)) {
-										correctData.push_back(bit);
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			else {
-				codeword.push_back(block.at(pi));
-				for (int bit : dict01decrypt.at(restore(codeword, a01, 1))) {
-					correctData.push_back(bit);
-				}
-				pi = pi + length + 1;
-			}
+			insertionDecode(block, codeword, lastSeg, new_syndrome, position);
 
 		}
 		codeword.clear();
 	}
 	return correctData;
 }
-
-vector<int> SegmentedCode::restore(vector<int> codeword, int syndrome, int mode) {
-	if (mode == 0) {
-		int weight = 0, checksum = 0, R1 = 0, L0 = 0;
-		int s; //s is the missing bit 
-		for (int i = 0; i < (length - 1); i++) {
-			checksum += codeword.at(i) * (i + 1);
-			weight += codeword.at(i);
+void SegmentedCode::deletionDecode(vector<int> codeword, bool shortSeg, int new_syndrome, int &pos) {
+	//segtype stands for which kind of segment we're decodin now (00 or 11)
+	int segType = codeword.at(0);
+	if (segType == 0) {
+		if (!shortSeg && (new_syndrome == syndrome_00)) {
+			pushData(codeword, "00");
+			pos = pos + length;
 		}
-		//number correction for modulo calculation:
-		int delta = (syndrome - checksum) % (length + 1);
-		if (delta < 0) delta += (length + 1);
-
-		//case of 0 was deleted
-		if (delta <= weight) {
-			s = 0;
-			R1 = delta;
-			for (int j = (length - 2); j >= 0; j--) {
-				if (R1 == 0) {
-					codeword.insert(codeword.begin() + (j + 1), 0);
-					break;
-				}
-				else if (codeword.at(j) == 1) R1--;
-			}
+		else {
+			if (!shortSeg) codeword.pop_back();
+			pushData(restoreDeletion(codeword, syndrome_00), "00");
+			pos = pos + length - 1;
 		}
-		else {//case of 1 was deleted
-			s = 1;
-			L0 = delta - 1 - weight;
-			for (int j = 0; j < length; j++) {
-				if (L0 == 0) {
-					codeword.insert(codeword.begin() + j, 1);
-					break;
+	}
+	else
+	{
+		if (!shortSeg && new_syndrome == syndrome_11) {
+			pushData(codeword, "11");
+			pos = pos + length;
+		}
+		else {
+			if (!shortSeg) codeword.pop_back();
+			pushData(restoreDeletion(codeword, syndrome_11), "11");
+			pos = pos + length - 1;
+		}
+	}
+}
+
+void SegmentedCode::insertionDecode(const vector<int> block, vector<int> codeword, bool lastSeg, int new_syndrome, int& pos) {
+	if (new_syndrome == syndrome_01) {
+		pushData(codeword, "01");
+		pos = pos + length;
+		//check if there was an insertion in the end
+		if (!lastSeg) {
+			if (!(block.at(pos) == 0 && block.at(pos + 1) == 1)) pos++;
+			else if (block.at(pos) == 0 && block.at(pos + 1) == 1 &&
+				block.at(pos + 2) == 0 && block.at(pos + 3) == 1) {
+				//check if the inserted bit is 0  at the position 2 in the next segment
+				codeword.clear();
+				for (int i = 0; i < (length + 1); i++) {
+					if (i != 2) {
+						codeword.push_back(block.at(pos + i));
+					}
 				}
-				else if (codeword.at(j) == 0) L0--;
+				if (syn(codeword) == syndrome_01) {
+					pos = pos + length + 1;
+					pushData(codeword, "01");
+				}
+				else {
+					//check if the inserted bit is 1 at the position 3 in the next segment
+					codeword.clear();
+					for (int i = 0; i < (length + 1); i++) {
+						if (i != 3) {
+							codeword.push_back(block.at(pos + i));
+						}
+					}
+					if (syn(codeword) == syndrome_01) {
+						pos = pos + length + 1;
+						pushData(codeword, "01");
+					}
+					else {
+						//check if the inserted bit is 0  at the position length+1 in
+						//the current segment and the inserted bit 1 in the position 0 in the next segment
+						codeword.clear();
+						for (int i = 2; i < length; i++) {
+							codeword.push_back(block.at(pos + i));
+						}
+						if (syn(codeword) == syndrome_01) {
+							pos = pos + length + 2;
+							pushData(codeword, "01");
+						}
+					}
+				}
 			}
 		}
 	}
 	else {
-		int weight = 0;
-		for (int i = 0; i < length + 1; i++) {
-			weight += codeword.at(i);
+		codeword.push_back(block.at(pos));
+		pushData(restoreInsertion(codeword), "01");
+		pos = pos + length + 1;
+	}
+}
+void SegmentedCode::pushData(vector<int> codeword, string dictType) {
+	if (dictType == "00") {
+		for (int bit : dict0decrypt.at(codeword)) {
+			correctData.push_back(bit);
 		}
-		int S = syn(codeword);
-		if (S - a01 == 0) { // special case when the inserted bit is at the end
-			codeword.pop_back();
+	}
+	else if (dictType == "11") {
+		for (int bit : dict1decrypt.at(codeword)) {
+			correctData.push_back(bit);
 		}
-		else if (S - a01 == weight) {
-			codeword.erase(codeword.begin());
+	}
+	else {
+		for (int bit : dict01decrypt.at(codeword)) {
+			correctData.push_back(bit);
 		}
-		else if (S - a01 < weight) { //the inserted bit is 0
-			int rOnes = S - a01;
-			int position = -1;
-			// Count rOnes bits from the right
-			for (int i = length; i >= 0; i--) {
-				if (codeword.at(i) == 1) {
-					rOnes--;
-					if (rOnes == 0) {
-						position = i;
-						break;
-					}
-				}
-			}
-			codeword.erase(codeword.begin() + position-1);
-		}
-		else if (S - a01 > weight) { // the inserted bit is 1
-			int rZeros = length + 2 - S;
-			int position = -1;
-			// Count rZeros bits from the right
-			for (int i = length; i >= 0; i--) {
-				if (codeword.at(i) == 0) {
-					rZeros--;
-					if (rZeros == 0) {
-						position = i;
-						break;
-					}
-				}
-			}
-			codeword.erase(codeword.begin() + position-1);
-		}
+	}
 
+}
+vector<int> SegmentedCode::restoreDeletion(vector<int> codeword, int syndrome) {
+	int weight = 0, checksum = 0, R1 = 0, L0 = 0;
+	int s; //s is the missing bit 
+	for (int i = 0; i < (length - 1); i++) {
+		checksum += codeword.at(i) * (i + 1);
+		weight += codeword.at(i);
+	}
+	//number correction for modulo calculation:
+	int delta = (syndrome - checksum) % (length + 1);
+	if (delta < 0) delta += (length + 1);
+
+	//case of 0 was deleted
+	if (delta <= weight) {
+		s = 0;
+		R1 = delta;
+		for (int j = (length - 2); j >= 0; j--) {
+			if (R1 == 0) {
+				codeword.insert(codeword.begin() + (j + 1), 0);
+				break;
+			}
+			else if (codeword.at(j) == 1) R1--;
+		}
+	}
+	else {//case of 1 was deleted
+		s = 1;
+		L0 = delta - 1 - weight;
+		for (int j = 0; j < length; j++) {
+			if (L0 == 0) {
+				codeword.insert(codeword.begin() + j, 1);
+				break;
+			}
+			else if (codeword.at(j) == 0) L0--;
+		}
 	}
 	return codeword;
 }
+
+vector<int> SegmentedCode::restoreInsertion(vector<int> codeword) {
+	int weight = 0;
+	for (int i = 0; i < length + 1; i++) {
+		weight += codeword.at(i);
+	}
+	int S = syn(codeword);
+	if (S - syndrome_01 == 0) { // special case when the inserted bit is at the end
+		codeword.pop_back();
+	}
+	else if (S - syndrome_01 == weight) {
+		codeword.erase(codeword.begin());
+	}
+	else if (S - syndrome_01 < weight) { //the inserted bit is 0
+		int rOnes = S - syndrome_01;
+		int position = -1;
+		// Count rOnes bits from the right
+		for (int i = length; i >= 0; i--) {
+			if (codeword.at(i) == 1) {
+				rOnes--;
+				if (rOnes == 0) {
+					position = i;
+					break;
+				}
+			}
+		}
+		codeword.erase(codeword.begin() + position - 1);
+	}
+	else if (S - syndrome_01 > weight) { // the inserted bit is 1
+		int rZeros = length + 2 - S;
+		int position = -1;
+		// Count rZeros bits from the right
+		for (int i = length; i >= 0; i--) {
+			if (codeword.at(i) == 0) {
+				rZeros--;
+				if (rZeros == 0) {
+					position = i;
+					break;
+				}
+			}
+		}
+		codeword.erase(codeword.begin() + position - 1);
+	}
+	return codeword;
+}
+
 
 vector<int> SegmentedCode::slice(const vector<int>& v, int m, int n) {
 	vector<int>::const_iterator start = v.begin() + m;
@@ -395,7 +404,7 @@ void SegmentedCode::print() {
 		cout << " ";
 	}
 	cout << endl;
-	cout << "syndrom : " << a0 << endl;
+	cout << "syndrom : " << syndrome_00 << endl;
 	cout << "11 prefix code: ";
 	for (vector<int> code : prefix_11_code) {
 		for (int bit : code) {
@@ -404,7 +413,7 @@ void SegmentedCode::print() {
 		cout << " ";
 	}
 	cout << endl;
-	cout << "syndrom : " << a1 << endl;
+	cout << "syndrom : " << syndrome_11 << endl;
 	cout << "insertion code: ";
 	for (vector<int> code : prefix_01_code) {
 		for (int bit : code) {
@@ -413,6 +422,6 @@ void SegmentedCode::print() {
 		cout << " ";
 	}
 	cout << endl;
-	cout << "syndrom : " << a01 << endl;
+	cout << "syndrom : " << syndrome_01 << endl;
 }
 

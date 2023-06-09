@@ -18,7 +18,11 @@ class SegmentedCode {
 		SegmentedCode(int b); //b is the leangth of the codes considering (b>=2)
 		vector<int> encode(vector<int> data, int mode);
 		vector<int> decode(vector<int> block, int mode);
-		vector<int> restore(vector<int> codeword, int syndrome, int mode);
+		void deletionDecode(vector<int> codeword, bool shortSeg, int new_syndrome, int &pos);
+		void insertionDecode(const vector<int> block, vector<int> codeword, bool lastSeg, int new_syndrome, int &pos);
+		void pushData(vector<int> codeword, string dictType);
+		vector<int> restoreDeletion(vector<int> codeword, int syndrome);
+		vector<int> restoreInsertion(vector<int> codeword);
 		void print();
 		int syn(const vector<int> codeword);
 		vector<vector<int>> prefix_00_code;
@@ -26,9 +30,9 @@ class SegmentedCode {
 		vector<vector<int>> prefix_01_code;
 		vector<int> slice(const vector<int>& v, int m, int n);
 		int Ms;
-		int a0;
-		int a1;
-		int a01;
+		int syndrome_00;
+		int syndrome_11;
+		int syndrome_01;
 		int length;
 		int numOfSegments;
 		int errorCorrectionMode; //0 for deletion, 1 for insertion
